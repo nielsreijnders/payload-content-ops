@@ -1,3 +1,10 @@
+## [2.2.1](https://github.com/nielsreijnders/payload-content-ops/compare/v2.2.0...v2.2.1) (2026-11-09)
+
+
+### Bug Fixes
+
+* detect missing published translations and verify every saved field ([0371a6f](https://github.com/nielsreijnders/payload-content-ops/commit/0371a6f0c04ef38315cfdb9ee4f5f7f6551965c5))
+
 # [2.2.0](https://github.com/nielsreijnders/payload-content-ops/compare/v2.1.3...v2.2.0) (2026-08-14)
 
 
