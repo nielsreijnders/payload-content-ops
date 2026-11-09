@@ -1,3 +1,10 @@
+## [2.2.2](https://github.com/nielsreijnders/payload-content-ops/compare/v2.2.1...v2.2.2) (2026-11-09)
+
+
+### Bug Fixes
+
+* expose exact fields and reasons behind translation sync status ([ca42017](https://github.com/nielsreijnders/payload-content-ops/commit/ca420174f03d3d02d09f3852081bdff6f4e92944))
+
 ## [2.2.1](https://github.com/nielsreijnders/payload-content-ops/compare/v2.2.0...v2.2.1) (2026-11-09)
 
 
