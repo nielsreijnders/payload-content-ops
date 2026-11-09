@@ -8,6 +8,8 @@ import {
   openAiTranslateTexts,
 } from '../../src/server/openAiTranslationClient.js'
 import { configureTranslationState } from '../../src/server/translationStateStore.js'
+import { createSyncStatusDocumentHandler } from '../../src/server/syncStatusHandler.js'
+import { buildSyncSnapshot } from '../../src/server/syncStatusStore.js'
 
 vi.mock('../../src/server/openAiTranslationClient.js', () => ({
   openAiDetectMissingInformation: vi.fn(),
@@ -223,5 +225,79 @@ describe('createAiBulkTranslateHandler', () => {
       type: 'document-success',
     })
     expect(events).toContainEqual({ failed: 0, processed: 1, skipped: 0, type: 'bulk-complete' })
+  })
+
+  it('repairs a missing published title without overwrite and clears the missing-field status', async () => {
+    const source = {
+      id: '27',
+      _status: 'published',
+      title: 'Ruitenberg',
+      seo: { title: 'Case study' },
+    }
+    let translated = { id: '27', title: '', seo: { title: 'Bestaande SEO titel' } }
+    const syncRecord = {
+      id: 1,
+      locale: 'nl',
+      target: 'pages:27',
+      snapshot: buildSyncSnapshot([
+        { lexical: false, path: 'title', text: source.title },
+        { lexical: false, path: 'seo.title', text: source.seo.title },
+      ]),
+    }
+    const payload = {
+      find: vi.fn(async ({ collection, locale }) => ({
+        docs:
+          collection === 'ai-translation-sync'
+            ? [syncRecord]
+            : [locale === 'nl' ? translated : source],
+        hasNextPage: false,
+        totalDocs: 1,
+      })),
+      findByID: vi.fn(async ({ locale }) => (locale === 'en' ? source : translated)),
+      logger: { error: vi.fn(), info: vi.fn(), warn: vi.fn() },
+      update: vi.fn(async (args) => {
+        if (args.collection === 'pages') translated = { ...translated, ...args.data }
+        return args.data
+      }),
+    }
+    const status = async () => {
+      const response = await createSyncStatusDocumentHandler()({
+        json: async () => ({ collection: 'pages', id: '27' }),
+        payload,
+        user: { id: 'user-1' },
+      } as any)
+      return (await response!.json()).status.locales[0]
+    }
+    expect(await status()).toMatchObject({ status: 'out-of-sync', missingFields: 1 })
+    detectMissingInformationMock.mockResolvedValue([])
+    translateTextsMock.mockResolvedValue(['Marktpotentieel voor Ruitenberg'])
+    const response = await createAiBulkTranslateHandler()({
+      json: async () => ({
+        collections: ['pages'],
+        documents: { pages: ['27'] },
+        overwrite: false,
+      }),
+      payload,
+      user: { id: 'user-1' },
+    } as any)
+    expect(parseEvents(await response.text())).toContainEqual({
+      failed: 0,
+      processed: 1,
+      skipped: 0,
+      type: 'bulk-complete',
+    })
+    expect(translated).toMatchObject({
+      title: 'Marktpotentieel voor Ruitenberg',
+      seo: { title: 'Bestaande SEO titel' },
+    })
+    expect(payload.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        collection: 'pages',
+        locale: 'nl',
+        publishSpecificLocale: 'nl',
+        data: { title: 'Marktpotentieel voor Ruitenberg', _status: 'published' },
+      }),
+    )
+    expect(await status()).toMatchObject({ changedFields: 0, status: 'synced' })
   })
 })

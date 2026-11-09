@@ -226,7 +226,12 @@ async function translateChunk(
   chunk: TranslateChunk,
   from: string,
   locale: string,
-  options: { collection: string; customPrompt?: string; documentId: number | string; model?: string },
+  options: {
+    collection: string
+    customPrompt?: string
+    documentId: number | string
+    model?: string
+  },
 ): Promise<string[]> {
   const texts = chunk.map((item) => item.text)
 
@@ -306,7 +311,12 @@ async function translateChunkGroup(
   chunks: TranslateChunk[],
   from: string,
   locale: string,
-  options: { collection: string; customPrompt?: string; documentId: number | string; model?: string },
+  options: {
+    collection: string
+    customPrompt?: string
+    documentId: number | string
+    model?: string
+  },
 ): Promise<string[][]> {
   if (!chunks.length) {
     return []
@@ -967,13 +977,24 @@ export async function* streamTranslations(
           return
         }
       } else {
-        logDebug(payload, '[AI Translate] Skipped post-save verification: could not re-read document.', {
-          collection: collectionSlug,
-          documentId: translationDocumentId,
-          from,
-          global: globalSlug,
-          locale,
-        })
+        logDebug(
+          payload,
+          '[AI Translate] Post-save verification failed: could not re-read document.',
+          {
+            collection: collectionSlug,
+            documentId: translationDocumentId,
+            from,
+            global: globalSlug,
+            locale,
+          },
+        )
+        yield {
+          type: 'error',
+          message:
+            `Could not verify the saved translation for ${targetLabel} (${locale}). ` +
+            'The document could not be re-read; the locale has not been marked as synced.',
+        }
+        return
       }
     }
 

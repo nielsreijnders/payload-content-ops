@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { findMissingTranslation, VERIFICATION_PATH_LIMIT } from '../../src/server/saveVerification.js'
+import { findMissingTranslation } from '../../src/server/saveVerification.js'
 
 const lexical = (text: string) => ({
   root: {
@@ -88,15 +88,14 @@ describe('findMissingTranslation', () => {
     expect(result).toBeNull()
   })
 
-  it('samples at most the configured number of paths', () => {
-    const paths = Array.from({ length: VERIFICATION_PATH_LIMIT + 2 }, (_, i) => `field${i}`)
+  it('detects missing fields beyond the first three paths', () => {
+    const paths = Array.from({ length: 5 }, (_, i) => `field${i}`)
     const expectedData = Object.fromEntries(paths.map((path) => [path, 'waarde']))
-    const persistedDoc = Object.fromEntries(
-      paths.slice(0, VERIFICATION_PATH_LIMIT).map((path) => [path, 'waarde']),
-    )
+    const persistedDoc = Object.fromEntries(paths.slice(0, 3).map((path) => [path, 'waarde']))
 
-    // Only the sampled prefix is checked; the missing tail beyond the limit
-    // is intentionally not inspected.
-    expect(findMissingTranslation({ expectedData, paths, persistedDoc })).toBeNull()
+    expect(findMissingTranslation({ expectedData, paths, persistedDoc })).toEqual({
+      expected: 'waarde',
+      path: 'field3',
+    })
   })
 })

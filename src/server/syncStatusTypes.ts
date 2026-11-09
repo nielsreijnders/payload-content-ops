@@ -11,10 +11,13 @@ export type SyncSnapshotEntry = {
 export type LocaleSyncStatus = {
   /**
    * Number of translatable fields that changed (or were added/removed) in the
-   * default locale since this locale was last synced.
+   * default locale since this locale was last synced, or are missing from the
+   * saved target locale. Each affected field is counted once.
    */
   changedFields: number
   locale: string
+  /** Number of source fields whose saved translation is empty or absent. */
+  missingFields?: number
   status: 'never-synced' | 'out-of-sync' | 'synced'
   syncedAt?: string
 }

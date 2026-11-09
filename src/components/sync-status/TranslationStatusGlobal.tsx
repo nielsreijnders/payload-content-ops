@@ -96,6 +96,9 @@ function localeBadgeText(locale: LocaleSyncStatus): string {
   if (locale.status === 'never-synced') {
     return `${locale.locale} · never synced`
   }
+  if (locale.missingFields) {
+    return `${locale.locale} · ${locale.changedFields} need sync (${locale.missingFields} missing)`
+  }
   return `${locale.locale} · ${locale.changedFields} changed`
 }
 
@@ -212,9 +215,7 @@ export function TranslationStatusGlobal({
 
   const selectedCollectionDocuments = React.useMemo(
     () =>
-      selectedDocuments.filter(
-        (document) => Boolean(document.collection) && document.id != null,
-      ),
+      selectedDocuments.filter((document) => Boolean(document.collection) && document.id != null),
     [selectedDocuments],
   )
 
@@ -272,9 +273,7 @@ export function TranslationStatusGlobal({
 
   const toggleSkipField = (field: string) =>
     setSkipFieldKeys((previous) =>
-      previous.includes(field)
-        ? previous.filter((entry) => entry !== field)
-        : [...previous, field],
+      previous.includes(field) ? previous.filter((entry) => entry !== field) : [...previous, field],
     )
 
   const handleScanEvent = (event: SyncStatusScanEvent) => {
@@ -615,7 +614,7 @@ export function TranslationStatusGlobal({
   return (
     <ToolPage running={busy}>
       <ToolPanel
-        description="Scan the selected collections and globals to see which documents changed after their last translation sync. Then select the documents below — everything or just a few — and translate them or sync their internal links."
+        description="Scan for source changes and missing saved translations. Published documents are checked against their published translations, without language fallback. Select documents below to translate them or sync their internal links."
         eyebrow="AI translations"
         headerExtra={
           <div className={toolStyles.badgeRow}>
@@ -787,7 +786,7 @@ export function TranslationStatusGlobal({
                       <td className={styles.fieldCount}>
                         {document.maxChangedFields ? (
                           <>
-                            {document.maxChangedFields}/{document.totalFields} changed
+                            {document.maxChangedFields}/{document.totalFields} need sync
                           </>
                         ) : (
                           <span className={styles.muted}>{document.totalFields} fields</span>

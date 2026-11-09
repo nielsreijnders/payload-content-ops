@@ -26,8 +26,7 @@ const recordSave = <T extends { data?: unknown; locale?: unknown }>(args: T): T 
   return args
 }
 
-const savedFor = (locale: unknown): Record<string, unknown> =>
-  savedLocaleData[String(locale)] ?? {}
+const savedFor = (locale: unknown): Record<string, unknown> => savedLocaleData[String(locale)] ?? {}
 
 describe('streamTranslations', () => {
   beforeEach(() => {
@@ -2140,6 +2139,73 @@ describe('streamTranslations', () => {
       }),
     )
   })
+
+  it.each(['unreadable', 'fourth-field'])(
+    'does not record a successful sync after %s verification failure',
+    async (failure) => {
+      const paths = ['subtitle', 'body', 'summary', 'title']
+      const baseDoc = {
+        id: '1',
+        _status: 'published',
+        ...Object.fromEntries(paths.map((path) => [path, `English ${path}`])),
+      }
+      configureTranslationState(
+        [
+          {
+            config: {
+              slug: 'pages',
+              fields: paths.map((name) => ({ name, type: 'text', localized: true })),
+            },
+          },
+        ],
+        [],
+        { defaultLocale: 'en', locales: ['en', 'nl'] },
+      )
+      let saved = false
+      const payloadMock = {
+        findByID: vi.fn(async ({ locale }) => {
+          if (locale === 'en') return baseDoc
+          if (!saved) return { id: '1' }
+          if (failure === 'unreadable') throw new Error('Read unavailable')
+          return {
+            id: '1',
+            ...Object.fromEntries(paths.slice(0, 3).map((path) => [path, `NL ${path}`])),
+          }
+        }),
+        find: vi.fn(async () => ({ docs: [] })),
+        create: vi.fn(),
+        logger: { error: vi.fn(), info: vi.fn(), warn: vi.fn() },
+        update: vi.fn(async () => {
+          saved = true
+          return {}
+        }),
+      }
+      translateTextsMock.mockResolvedValue(paths.map((path) => `NL ${path}`))
+      const events = []
+      for await (const event of streamTranslations(payloadMock as unknown as Payload, {
+        collection: 'pages',
+        id: '1',
+        from: 'en',
+        locales: [
+          {
+            code: 'nl',
+            chunks: [paths.map((path) => ({ lexical: false, path, text: `English ${path}` }))],
+          },
+        ],
+      }))
+        events.push(event)
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: 'error',
+          message: expect.stringContaining(
+            failure === 'unreadable' ? 'Could not verify' : 'did not persist at "title"',
+          ),
+        }),
+      )
+      expect(events.some((event) => event.type === 'applied')).toBe(false)
+      expect(payloadMock.create).not.toHaveBeenCalled()
+    },
+  )
 
   it('emits an error when a saved translation does not persist in the target locale', async () => {
     const baseDoc = { id: '1', title: 'Hello world' }

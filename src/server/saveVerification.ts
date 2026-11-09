@@ -1,8 +1,5 @@
 import { extractPlainText, getValueAtPath } from '../utils/localizedFields.js'
 
-/** Number of translated paths sampled for post-save verification. */
-export const VERIFICATION_PATH_LIMIT = 3
-
 export type MissingTranslation = { expected: string; path: string }
 
 const normalizeComparable = (value: unknown): null | string => {
@@ -41,7 +38,7 @@ export function findMissingTranslation({
   paths: string[]
   persistedDoc: Record<string, unknown>
 }): MissingTranslation | null {
-  for (const path of paths.slice(0, VERIFICATION_PATH_LIMIT)) {
+  for (const path of new Set(paths)) {
     const expected = normalizeComparable(getValueAtPath(expectedData, path))
     if (!expected) {
       continue

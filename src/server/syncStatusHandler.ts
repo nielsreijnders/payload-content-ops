@@ -16,6 +16,7 @@ import {
   buildTargetKey,
   computeLocaleStatuses,
   fetchSyncRecords,
+  findMissingLocaleFields,
 } from './syncStatusStore.js'
 import {
   getStoredCollection,
@@ -56,19 +57,95 @@ function resolveDocumentLabel(doc: Record<string, unknown>, fallback: string): s
   return fallback
 }
 
+type LocaleDocuments = Map<string, Map<string, Record<string, unknown>>>
+
+/** Batch reads by locale and publication state; fallback must never hide gaps. */
+async function loadTargetLocales(
+  req: PayloadRequest,
+  target: {
+    collection?: string
+    documents?: Record<string, unknown>[]
+    draft?: boolean
+    global?: string
+  },
+  locales: string[],
+): Promise<LocaleDocuments> {
+  const result: LocaleDocuments = new Map()
+  const requestLocale = req.locale
+  const requestFallback = req.fallbackLocale
+
+  try {
+    // Payload mutates req.locale on local reads. Keep these reads sequential
+    // and restore the request even if a locale fails its access check.
+    for (const locale of locales) {
+      const readOptions = {
+        depth: 0,
+        draft: target.draft ?? false,
+        fallbackLocale: false as const,
+        locale,
+        overrideAccess: false,
+        req,
+      }
+      if (target.global) {
+        const doc = await req.payload.findGlobal({ slug: target.global, ...readOptions })
+        result.set(locale, new Map([[target.global, doc as Record<string, unknown>]]))
+      } else if (target.collection) {
+        const localizedDocs = new Map<string, Record<string, unknown>>()
+        for (const draft of [false, true]) {
+          const ids = (target.documents ?? [])
+            .filter((doc) => (doc._status === 'draft') === draft)
+            .map((doc) => toIdentifier(doc.id) ?? toIdentifier(doc._id))
+            .filter((id): id is number | string => id !== null)
+          if (!ids.length) {
+            continue
+          }
+          const docs = await req.payload.find({
+            collection: target.collection,
+            ...readOptions,
+            draft,
+            limit: ids.length,
+            pagination: false,
+            where: { id: { in: ids } },
+          })
+          for (const doc of docs.docs) {
+            localizedDocs.set(String(doc.id), doc as Record<string, unknown>)
+          }
+        }
+        result.set(locale, localizedDocs)
+      }
+    }
+  } finally {
+    req.locale = requestLocale
+    req.fallbackLocale = requestFallback
+  }
+  return result
+}
+
 function buildStatusDocument(options: {
   collection?: string
   doc: Record<string, unknown>
   entry: StoredEntry
   global?: string
   id?: number | string
+  localeDocuments: LocaleDocuments
   records: StoredSyncRecord[]
   targetLocales: string[]
 }): SyncStatusDocument {
-  const { id, collection, doc, entry, global, records, targetLocales } = options
+  const { id, collection, doc, entry, global, localeDocuments, records, targetLocales } = options
   const items = buildTranslatableItems(doc, entry.fieldPatterns)
   const snapshot = buildSyncSnapshot(items)
-  const locales = computeLocaleStatuses(snapshot, records, targetLocales)
+  const missingByLocale = new Map(
+    targetLocales.map((locale) => [
+      locale,
+      findMissingLocaleFields(
+        doc,
+        localeDocuments.get(locale)?.get(global ?? String(id)),
+        items,
+        entry.localizedContainerPatterns,
+      ),
+    ]),
+  )
+  const locales = computeLocaleStatuses(snapshot, records, targetLocales, missingByLocale)
   const fallbackLabel = global ? entry.label : `${entry.label} ${String(id ?? '')}`.trim()
 
   return {
@@ -156,6 +233,7 @@ async function* runSyncStatusScan(
         const result = await payload.find({
           collection: entry.slug,
           depth: 0,
+          draft: false,
           fallbackLocale: false,
           limit: 50,
           locale: defaultLocale,
@@ -170,6 +248,14 @@ async function* runSyncStatusScan(
           .filter((id): id is number | string => id !== null)
           .map((id) => buildTargetKey({ collection: entry.slug, documentId: id }))
         const recordsByTarget = await fetchSyncRecords(payload, targets)
+        const localeDocuments = await loadTargetLocales(
+          req,
+          {
+            collection: entry.slug,
+            documents: docs,
+          },
+          targetLocales,
+        )
 
         for (const doc of docs) {
           const id = toIdentifier(doc.id) ?? toIdentifier(doc._id)
@@ -183,6 +269,7 @@ async function* runSyncStatusScan(
             collection: entry.slug,
             doc,
             entry,
+            localeDocuments,
             records: recordsByTarget.get(target) ?? [],
             targetLocales,
           })
@@ -216,6 +303,7 @@ async function* runSyncStatusScan(
       const doc = (await payload.findGlobal({
         slug: entry.slug,
         depth: 0,
+        draft: false,
         fallbackLocale: false,
         locale: defaultLocale,
         overrideAccess: false,
@@ -224,10 +312,16 @@ async function* runSyncStatusScan(
 
       const target = buildTargetKey({ global: entry.slug })
       const recordsByTarget = await fetchSyncRecords(payload, [target])
+      const localeDocuments = await loadTargetLocales(
+        req,
+        { draft: doc._status === 'draft', global: entry.slug },
+        targetLocales,
+      )
       const document = buildStatusDocument({
         doc,
         entry,
         global: entry.slug,
+        localeDocuments,
         records: recordsByTarget.get(target) ?? [],
         targetLocales,
       })
@@ -313,6 +407,7 @@ async function computeSingleTargetStatus(
     const doc = (await payload.findGlobal({
       slug: input.global,
       depth: 0,
+      draft: false,
       fallbackLocale: false,
       locale: defaultLocale,
       overrideAccess: false,
@@ -320,11 +415,17 @@ async function computeSingleTargetStatus(
     })) as Record<string, unknown>
     const target = buildTargetKey({ global: input.global })
     const recordsByTarget = await fetchSyncRecords(payload, [target])
+    const localeDocuments = await loadTargetLocales(
+      req,
+      { draft: doc._status === 'draft', global: input.global },
+      targetLocales,
+    )
 
     return buildStatusDocument({
       doc,
       entry,
       global: input.global,
+      localeDocuments,
       records: recordsByTarget.get(target) ?? [],
       targetLocales,
     })
@@ -343,6 +444,7 @@ async function computeSingleTargetStatus(
     id: input.id,
     collection: input.collection,
     depth: 0,
+    draft: false,
     fallbackLocale: false,
     locale: defaultLocale,
     overrideAccess: false,
@@ -350,12 +452,21 @@ async function computeSingleTargetStatus(
   })) as Record<string, unknown>
   const target = buildTargetKey({ collection: input.collection, documentId: input.id })
   const recordsByTarget = await fetchSyncRecords(payload, [target])
+  const localeDocuments = await loadTargetLocales(
+    req,
+    {
+      collection: input.collection,
+      documents: [doc],
+    },
+    targetLocales,
+  )
 
   return buildStatusDocument({
     id: input.id,
     collection: input.collection,
     doc,
     entry,
+    localeDocuments,
     records: recordsByTarget.get(target) ?? [],
     targetLocales,
   })
@@ -390,8 +501,7 @@ export function createSyncStatusDocumentHandler(): PayloadHandler {
 
       return Response.json({ status })
     } catch (error) {
-      const message =
-        error instanceof Error ? error.message : 'Failed to determine sync status.'
+      const message = error instanceof Error ? error.message : 'Failed to determine sync status.'
       return Response.json({ message }, { status: 400 })
     }
   }

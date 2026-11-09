@@ -23,14 +23,23 @@ import type { CollectionBeforeChangeHook, Payload, SanitizedConfig } from 'paylo
 
 import { postgresAdapter } from '@payloadcms/db-postgres'
 import pg from 'pg'
-import { buildConfig, getPayload } from 'payload'
+import { buildConfig, createLocalReq, getPayload } from 'payload'
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import type { TranslateRequestPayload, TranslateStreamEvent } from '../../src/server/translationTypes.js'
+import type {
+  TranslateRequestPayload,
+  TranslateStreamEvent,
+} from '../../src/server/translationTypes.js'
 
 import { openAiTranslateTexts } from '../../src/server/openAiTranslationClient.js'
 import { streamTranslations } from '../../src/server/translationStream.js'
 import { configureTranslationState } from '../../src/server/translationStateStore.js'
+import { createSyncStatusDocumentHandler } from '../../src/server/syncStatusHandler.js'
+import {
+  buildSyncSnapshot,
+  createSyncStatusCollection,
+  recordSyncSnapshot,
+} from '../../src/server/syncStatusStore.js'
 
 vi.mock('../../src/server/openAiTranslationClient.js', () => ({
   openAiTranslateTexts: vi.fn(),
@@ -107,6 +116,7 @@ const collectionFields = [
 const buildTestConfig = (): Promise<SanitizedConfig> =>
   buildConfig({
     collections: [
+      createSyncStatusCollection(),
       {
         slug: 'posts',
         fields: collectionFields,
@@ -236,9 +246,9 @@ describeInt('translation persistence (real Payload + Postgres)', () => {
       },
       locale: 'en',
     })
-    const originalRowIds = (
-      created as { layout?: Array<{ id?: null | string }> }
-    ).layout?.map((row) => row.id)
+    const originalRowIds = (created as { layout?: Array<{ id?: null | string }> }).layout?.map(
+      (row) => row.id,
+    )
     expect(originalRowIds).toHaveLength(2)
 
     const events = await runStream({
@@ -291,9 +301,7 @@ describeInt('translation persistence (real Payload + Postgres)', () => {
       id: created.id,
       collection: 'hostile',
       from: 'en',
-      locales: [
-        { chunks: [[textChunk('title', 'English title')]], code: 'nl' },
-      ],
+      locales: [{ chunks: [[textChunk('title', 'English title')]], code: 'nl' }],
     })
 
     expect(events).toContainEqual(
@@ -366,5 +374,53 @@ describeInt('translation persistence (real Payload + Postgres)', () => {
     // …and the pending en draft edit survives the locale publish.
     const draftEn = await read('posts', created.id, 'en', true)
     expect(draftEn.title).toBe('Draft edit')
+  })
+
+  it('flags a missing published translation even when its draft and sync record are complete', async () => {
+    configureTranslationState([{ config: { fields: collectionFields, slug: 'posts' } }], [], {
+      defaultLocale: 'en',
+      locales: ['en', 'nl'],
+    })
+    const created = await payload.create({
+      collection: 'posts',
+      locale: 'en',
+      data: { _status: 'published', title: 'Ruitenberg' },
+    })
+    await payload.update({
+      collection: 'posts',
+      id: created.id,
+      locale: 'nl',
+      draft: true,
+      data: { title: 'Nederlandse concepttitel' },
+    })
+    await recordSyncSnapshot(payload, {
+      locale: 'nl',
+      target: `posts:${created.id}`,
+      snapshot: buildSyncSnapshot([textChunk('title', 'Ruitenberg')]),
+    })
+    expect((await read('posts', created.id, 'nl', true)).title).toBe('Nederlandse concepttitel')
+    expect((await read('posts', created.id, 'nl', false)).title).toBeFalsy()
+
+    const req = await createLocalReq({ user: { id: 1, collection: 'users' } as any }, payload)
+    req.json = async () => ({ collection: 'posts', id: created.id })
+    const response = await createSyncStatusDocumentHandler()(req)
+    expect((await response!.json()).status.locales[0]).toMatchObject({
+      status: 'out-of-sync',
+      missingFields: 1,
+    })
+
+    const events = await runStream({
+      collection: 'posts',
+      id: created.id,
+      from: 'en',
+      locales: [{ code: 'nl', chunks: [[textChunk('title', 'Ruitenberg')]] }],
+    })
+    expect(events).toContainEqual({ type: 'applied', locale: 'nl' })
+    expect((await read('posts', created.id, 'nl', false)).title).toBe('NL Ruitenberg')
+    const repaired = await createSyncStatusDocumentHandler()(req)
+    expect((await repaired!.json()).status.locales[0]).toMatchObject({
+      status: 'synced',
+      changedFields: 0,
+    })
   })
 })

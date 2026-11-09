@@ -5,7 +5,12 @@ import { createHash } from 'node:crypto'
 import type { TranslatableItem } from '../components/auto-translate-button/utils/buildTranslatableItems.js'
 import type { LocaleSyncStatus, SyncSnapshotEntry } from './syncStatusTypes.js'
 
+import { extractPlainText, getValueAtPath } from '../utils/localizedFields.js'
 import { logDebug } from './debugSettings.js'
+import {
+  collectConcreteLocalizedContainerPaths,
+  pruneIdentifierFields,
+} from './identifierPruning.js'
 
 /**
  * Bookkeeping for translation syncs. Every successful sync of a locale stores
@@ -105,13 +110,13 @@ function snapshotEntryKey(entry: { lexical: boolean; path: string }): string {
  * stored snapshot. Added and removed fields count as changes too — removed
  * content leaves stale text behind in the target locale.
  */
-export function countSnapshotChanges(
+function changedSnapshotKeys(
   current: SyncSnapshotEntry[],
   stored: SyncSnapshotEntry[],
-): number {
+): Set<string> {
   const storedByKey = new Map(stored.map((entry) => [snapshotEntryKey(entry), entry.hash]))
   const seen = new Set<string>()
-  let changes = 0
+  const changes = new Set<string>()
 
   for (const entry of current) {
     const key = snapshotEntryKey(entry)
@@ -119,17 +124,45 @@ export function countSnapshotChanges(
 
     const previousHash = storedByKey.get(key)
     if (previousHash === undefined || previousHash !== entry.hash) {
-      changes += 1
+      changes.add(key)
     }
   }
 
   for (const key of storedByKey.keys()) {
     if (!seen.has(key)) {
-      changes += 1
+      changes.add(key)
     }
   }
 
   return changes
+}
+
+export function countSnapshotChanges(
+  current: SyncSnapshotEntry[],
+  stored: SyncSnapshotEntry[],
+): number {
+  return changedSnapshotKeys(current, stored).size
+}
+
+/** Check actual locale content, independently of the last source fingerprint. */
+export function findMissingLocaleFields(
+  source: Record<string, unknown>,
+  translated: Record<string, unknown> | undefined,
+  items: TranslatableItem[],
+  localizedContainerPatterns: string[] = [],
+): string[] {
+  // Shared rows follow their ids when reordered. Localized arrays have their
+  // own ids per locale, so compare those rows by position instead.
+  const base = pruneIdentifierFields(source, {
+    localizedContainers: collectConcreteLocalizedContainerPaths(source, localizedContainerPatterns),
+  })
+  return [
+    ...new Set(
+      items
+        .filter((item) => !extractPlainText(getValueAtPath(translated, item.path, { base })))
+        .map((item) => item.path),
+    ),
+  ]
 }
 
 function normalizeSnapshot(value: unknown): SyncSnapshotEntry[] {
@@ -269,27 +302,42 @@ export async function fetchSyncRecords(
 
 /**
  * Derives the per-locale sync status of a document from its current snapshot
- * and the stored records. Documents without translatable content report as
+ * and actual target-locale completeness. Documents without translatable content report as
  * synced — there is nothing to translate.
  */
 export function computeLocaleStatuses(
   current: SyncSnapshotEntry[],
   records: StoredSyncRecord[],
   locales: string[],
+  missingByLocale: ReadonlyMap<string, string[]> = new Map(),
 ): LocaleSyncStatus[] {
   return locales.map((locale) => {
     const record = records.find((entry) => entry.locale === locale)
+    const missingPaths = new Set(missingByLocale.get(locale) ?? [])
+    const missing = current.filter((entry) => missingPaths.has(entry.path))
+    const missingFields = new Set(missing.map(snapshotEntryKey)).size
+    const completeness = missingFields ? { missingFields } : {}
 
     if (!record) {
       return current.length
-        ? { changedFields: current.length, locale, status: 'never-synced' as const }
+        ? {
+            changedFields: current.length,
+            ...completeness,
+            locale,
+            status: 'never-synced' as const,
+          }
         : { changedFields: 0, locale, status: 'synced' as const }
     }
 
-    const changedFields = countSnapshotChanges(current, record.snapshot)
+    const affected = changedSnapshotKeys(current, record.snapshot)
+    for (const entry of missing) {
+      affected.add(snapshotEntryKey(entry))
+    }
+    const changedFields = affected.size
 
     return {
       changedFields,
+      ...completeness,
       locale,
       status: changedFields ? ('out-of-sync' as const) : ('synced' as const),
       syncedAt: record.syncedAt,

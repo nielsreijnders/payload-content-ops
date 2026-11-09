@@ -328,6 +328,13 @@ fingerprint per document and locale, and surfaces the drift in two places:
 Tracking is content-based (a hash per translatable field), so edits to other
 locales or non-translatable fields never cause false positives.
 
+Status scans also read the saved target-locale fields without language fallback.
+A matching source fingerprint is not enough to be up to date: missing or empty
+translations are marked as needing sync, with a missing-field count. Published
+documents are checked against their published translations; draft sources are
+checked against saved drafts. After translating, every translated field is
+checked for persistence before the sync is recorded as successful.
+
 For collections and globals with drafts enabled, every plugin save mirrors the
 source document's publish state: published documents publish **only** the
 locale being saved (draft edits in other locales stay drafts, so nothing is
