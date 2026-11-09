@@ -54,6 +54,25 @@ export function DebugDocumentCopyButton(props: AutoTranslateButtonProps) {
       const chunked = chunkItems(items)
 
       const defaultLocale = props.defaultLocale
+      // Form data may be an unsaved draft. Include the server's comparison
+      // against the saved source and last sync instead of guessing from it.
+      let syncStatus: unknown = null
+      if (globalSlug || id != null) {
+        try {
+          const response = await fetch('/api/ai-sync-status/document', {
+            body: JSON.stringify({ id, collection: collectionSlug, global: globalSlug }),
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            method: 'POST',
+            signal: AbortSignal.timeout(10000),
+          })
+          syncStatus = response.ok
+            ? await response.json()
+            : { error: `Status request failed (${response.status}).` }
+        } catch {
+          syncStatus = { error: 'Could not load saved translation status.' }
+        }
+      }
 
       const payload = {
         chunks: chunked,
@@ -66,6 +85,7 @@ export function DebugDocumentCopyButton(props: AutoTranslateButtonProps) {
           globalSlug,
           locales: props.locales,
         },
+        syncStatus,
         translatableItems: items,
       }
 

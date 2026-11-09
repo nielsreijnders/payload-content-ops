@@ -6,6 +6,7 @@ import * as React from 'react'
 import type { BulkLinkSyncResponse } from '../../server/linkSyncTypes.js'
 import type {
   LocaleSyncStatus,
+  SyncFieldChange,
   SyncStatusDocument,
   SyncStatusScanEvent,
 } from '../../server/syncStatusTypes.js'
@@ -56,6 +57,13 @@ type TranslationStatusGlobalProps = {
 }
 
 type StatusFilter = 'all' | 'needs-sync' | 'synced'
+
+const changeLabels: Record<SyncFieldChange['reason'], string> = {
+  added: 'Added in source',
+  changed: 'Source changed',
+  missing: 'Translation missing',
+  removed: 'Removed from source',
+}
 
 function documentNeedsSync(document: SyncStatusDocument): boolean {
   return document.locales.some((locale) => locale.status !== 'synced')
@@ -614,7 +622,7 @@ export function TranslationStatusGlobal({
   return (
     <ToolPage running={busy}>
       <ToolPanel
-        description="Scan for source changes and missing saved translations. Published documents are checked against their published translations, without language fallback. Select documents below to translate them or sync their internal links."
+        description="Scan for source changes and missing saved translations. Published documents are checked against their published translations, without language fallback. An up-to-date status confirms these checks; language quality still needs editorial review. Select documents below to translate them or sync their internal links."
         eyebrow="AI translations"
         headerExtra={
           <div className={toolStyles.badgeRow}>
@@ -791,6 +799,21 @@ export function TranslationStatusGlobal({
                         ) : (
                           <span className={styles.muted}>{document.totalFields} fields</span>
                         )}
+                        {document.locales.some((locale) => locale.fieldChanges?.length) ? (
+                          <details>
+                            <summary>Show fields</summary>
+                            {document.locales.flatMap((locale) =>
+                              (locale.fieldChanges ?? []).map((change) => (
+                                <div key={`${locale.locale}:${change.lexical}:${change.path}`}>
+                                  {locale.locale} · {change.path}: {changeLabels[change.reason]}
+                                  {change.missingTranslation && change.reason !== 'missing'
+                                    ? ' · translation missing'
+                                    : ''}
+                                </div>
+                              )),
+                            )}
+                          </details>
+                        ) : null}
                       </td>
                       <td>
                         <span className={styles.muted}>{formatSyncedAt(latestSync)}</span>

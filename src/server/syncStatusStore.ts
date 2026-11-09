@@ -3,7 +3,7 @@ import type { CollectionConfig, Payload } from 'payload'
 import { createHash } from 'node:crypto'
 
 import type { TranslatableItem } from '../components/auto-translate-button/utils/buildTranslatableItems.js'
-import type { LocaleSyncStatus, SyncSnapshotEntry } from './syncStatusTypes.js'
+import type { LocaleSyncStatus, SyncFieldChange, SyncSnapshotEntry } from './syncStatusTypes.js'
 
 import { extractPlainText, getValueAtPath } from '../utils/localizedFields.js'
 import { logDebug } from './debugSettings.js'
@@ -334,9 +334,31 @@ export function computeLocaleStatuses(
       affected.add(snapshotEntryKey(entry))
     }
     const changedFields = affected.size
+    const currentByKey = new Map(current.map((entry) => [snapshotEntryKey(entry), entry]))
+    const storedByKey = new Map(record.snapshot.map((entry) => [snapshotEntryKey(entry), entry]))
+    const fieldChanges: SyncFieldChange[] = [...affected].map((key) => {
+      const now = currentByKey.get(key)
+      const before = storedByKey.get(key)
+      const entry = now ?? before!
+      return {
+        ...(now ? { currentHash: now.hash } : {}),
+        lexical: entry.lexical,
+        ...(now && missingPaths.has(now.path) ? { missingTranslation: true } : {}),
+        path: entry.path,
+        ...(before ? { previousHash: before.hash } : {}),
+        reason: !now
+          ? 'removed'
+          : !before
+            ? 'added'
+            : now.hash !== before.hash
+              ? 'changed'
+              : 'missing',
+      }
+    })
 
     return {
       changedFields,
+      ...(fieldChanges.length ? { fieldChanges } : {}),
       ...completeness,
       locale,
       status: changedFields ? ('out-of-sync' as const) : ('synced' as const),

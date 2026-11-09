@@ -65,7 +65,13 @@ describe('sync status completeness', () => {
     const { payload, req } = setup()
     const response = await createSyncStatusDocumentHandler()(req as any)
     expect((await response!.json()).status.locales).toEqual([
-      { changedFields: 1, missingFields: 1, locale: 'nl', status: 'out-of-sync' },
+      expect.objectContaining({
+        changedFields: 1,
+        missingFields: 1,
+        locale: 'nl',
+        status: 'out-of-sync',
+        fieldChanges: [expect.objectContaining({ path: 'title', reason: 'missing' })],
+      }),
     ])
     expect(payload.find).toHaveBeenCalledWith(
       expect.objectContaining({

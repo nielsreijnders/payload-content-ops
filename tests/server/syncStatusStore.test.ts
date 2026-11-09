@@ -108,6 +108,15 @@ describe('computeLocaleStatuses', () => {
 
     expect(status.status).toBe('out-of-sync')
     expect(status.changedFields).toBe(1)
+    expect(status.fieldChanges).toEqual([
+      {
+        currentHash: current[0].hash,
+        lexical: false,
+        path: 'title',
+        previousHash: stored[0].hash,
+        reason: 'changed',
+      },
+    ])
   })
 
   test('treats documents without translatable content as synced', () => {
@@ -124,6 +133,16 @@ describe('computeLocaleStatuses', () => {
       new Map([['nl', ['title']]]),
     )
     expect(status).toMatchObject({ changedFields: 1, missingFields: 1, status: 'out-of-sync' })
+    expect(status.fieldChanges).toEqual([
+      {
+        currentHash: current[0].hash,
+        lexical: false,
+        missingTranslation: true,
+        path: 'title',
+        previousHash: current[0].hash,
+        reason: 'missing',
+      },
+    ])
   })
 
   test('does not double-count fields that changed and are also missing', () => {
@@ -135,6 +154,17 @@ describe('computeLocaleStatuses', () => {
       new Map([['nl', ['title', 'title']]]),
     )
     expect(status).toMatchObject({ changedFields: 1, missingFields: 1, status: 'out-of-sync' })
+    expect(status.fieldChanges).toHaveLength(1)
+    expect(status.fieldChanges?.[0]).toMatchObject({ reason: 'changed', missingTranslation: true })
+  })
+
+  test('identifies removed and added fields without labelling them as missing translations', () => {
+    const stored = buildSyncSnapshot([{ lexical: true, path: 'body', text: 'Old body' }])
+    const [status] = computeLocaleStatuses(current, [{ locale: 'nl', snapshot: stored }], ['nl'])
+    expect(status.fieldChanges).toEqual([
+      { currentHash: current[0].hash, lexical: false, path: 'title', reason: 'added' },
+      { lexical: true, path: 'body', previousHash: stored[0].hash, reason: 'removed' },
+    ])
   })
 
   test('keeps completeness checks independent for each locale', () => {

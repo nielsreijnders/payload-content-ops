@@ -10,6 +10,7 @@ import type { StoredEntry } from './translationStateStore.js'
 
 import { buildTranslatableItems } from '../components/auto-translate-button/utils/buildTranslatableItems.js'
 import { sanitizeSlugArray, toIdentifier } from './bulkRequestParsing.js'
+import { logDebug } from './debugSettings.js'
 import { rejectUnauthenticated } from './requireUser.js'
 import {
   buildSyncSnapshot,
@@ -25,6 +26,18 @@ import {
 } from './translationStateStore.js'
 
 const encoder = new TextEncoder()
+
+function logStatusDifferences(payload: Payload, document: SyncStatusDocument): void {
+  const locales = document.locales.filter((locale) => locale.fieldChanges?.length)
+  if (locales.length) {
+    logDebug(payload, '[AI Sync] Translation sync differences.', {
+      collection: document.collection,
+      comparisons: JSON.stringify(locales),
+      documentId: document.id,
+      global: document.global,
+    })
+  }
+}
 
 function serializeEvent(event: SyncStatusScanEvent): Uint8Array {
   return encoder.encode(`${JSON.stringify(event)}\n`)
@@ -214,6 +227,7 @@ async function* runSyncStatusScan(
 
   const emitTracking = (document: SyncStatusDocument): boolean => {
     processed += 1
+    logStatusDifferences(payload, document)
     return document.locales.some((locale) => locale.status !== 'synced')
   }
 
@@ -499,6 +513,7 @@ export function createSyncStatusDocumentHandler(): PayloadHandler {
         return Response.json({ message: 'Target is not configured for sync.' }, { status: 404 })
       }
 
+      logStatusDifferences(req.payload, status)
       return Response.json({ status })
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to determine sync status.'

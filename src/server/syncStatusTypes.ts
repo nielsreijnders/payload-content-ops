@@ -8,6 +8,15 @@ export type SyncSnapshotEntry = {
   path: string
 }
 
+export type SyncFieldChange = {
+  currentHash?: string
+  lexical: boolean
+  missingTranslation?: boolean
+  path: string
+  previousHash?: string
+  reason: 'added' | 'changed' | 'missing' | 'removed'
+}
+
 export type LocaleSyncStatus = {
   /**
    * Number of translatable fields that changed (or were added/removed) in the
@@ -15,6 +24,8 @@ export type LocaleSyncStatus = {
    * saved target locale. Each affected field is counted once.
    */
   changedFields: number
+  /** Exact saved fields behind the count; hashes refer to the source locale. */
+  fieldChanges?: SyncFieldChange[]
   locale: string
   /** Number of source fields whose saved translation is empty or absent. */
   missingFields?: number
